@@ -186,6 +186,14 @@ func (w *widgetBase) IsWIP() bool {
 	return w.WIP
 }
 
+// IsPending reports whether the widget is still waiting on its first
+// successful data fetch and is currently showing placeholder content.
+// Overridden by widgets that update asynchronously in the background
+// so the client knows to poll for the real content.
+func (w *widgetBase) IsPending() bool {
+	return false
+}
+
 func (w *widgetBase) update(ctx context.Context) {
 
 }
