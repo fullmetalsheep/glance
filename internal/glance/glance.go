@@ -174,7 +174,7 @@ func newApplication(c *config) (*application, error) {
 
 		for i := range page.HeadWidgets {
 			widget := page.HeadWidgets[i]
-			app.widgetByID[widget.GetID()] = widget
+			app.registerWidgetByID(widget)
 			widget.setProviders(providers)
 		}
 
@@ -187,7 +187,7 @@ func newApplication(c *config) (*application, error) {
 
 			for w := range column.Widgets {
 				widget := column.Widgets[w]
-				app.widgetByID[widget.GetID()] = widget
+				app.registerWidgetByID(widget)
 				widget.setProviders(providers)
 			}
 		}
@@ -228,6 +228,23 @@ func newApplication(c *config) (*application, error) {
 	app.parsedManifest = []byte(manifest)
 
 	return app, nil
+}
+
+// widgetWithChildren is implemented by container widgets (group, split-column)
+// so their children can be registered individually and addressed via their
+// own ID, e.g. for per-widget async content requests.
+type widgetWithChildren interface {
+	_children() []widget
+}
+
+func (a *application) registerWidgetByID(w widget) {
+	a.widgetByID[w.GetID()] = w
+
+	if container, ok := w.(widgetWithChildren); ok {
+		for _, child := range container._children() {
+			a.registerWidgetByID(child)
+		}
+	}
 }
 
 func (p *page) updateOutdatedWidgets() {

@@ -10,6 +10,10 @@ type containerWidgetBase struct {
 	Widgets widgets `yaml:"widgets"`
 }
 
+func (widget *containerWidgetBase) _children() []widget {
+	return widget.Widgets
+}
+
 func (widget *containerWidgetBase) _initializeWidgets() error {
 	for i := range widget.Widgets {
 		if err := widget.Widgets[i].initialize(); err != nil {
