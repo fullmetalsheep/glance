@@ -743,6 +743,47 @@ function initThemePicker() {
     })
 }
 
+const widgetPollIntervalMs = 1500;
+const widgetPollMaxAttempts = 30;
+
+async function pollPendingWidget(widgetElement, attempt = 0) {
+    const widgetId = widgetElement.dataset.widgetId;
+    if (!widgetId || attempt >= widgetPollMaxAttempts) return;
+
+    setTimeout(async () => {
+        // the widget may have been replaced by a previous/parallel poll already
+        if (!widgetElement.isConnected) return;
+
+        try {
+            const response = await fetch(`${pageData.baseURL}/api/widgets/${widgetId}/content/`);
+            if (!response.ok) throw new Error(`received status ${response.status}`);
+            const html = await response.text();
+
+            const template = document.createElement("template");
+            template.innerHTML = html.trim();
+            const newWidgetElement = template.content.firstElementChild;
+            if (!newWidgetElement) return;
+
+            widgetElement.replaceWith(newWidgetElement);
+            setupTruncatedElementTitles();
+
+            if (newWidgetElement.dataset.widgetPending === "true") {
+                pollPendingWidget(newWidgetElement, attempt + 1);
+            }
+        } catch (err) {
+            console.error(`Failed to fetch updated content for widget ${widgetId}:`, err);
+        }
+    }, widgetPollIntervalMs);
+}
+
+function setupAsyncWidgets() {
+    const pendingWidgets = document.querySelectorAll("[data-widget-pending='true']");
+
+    for (let i = 0; i < pendingWidgets.length; i++) {
+        pollPendingWidget(pendingWidgets[i]);
+    }
+}
+
 async function setupPage() {
     initThemePicker();
 
@@ -765,6 +806,7 @@ async function setupPage() {
         setupMasonries();
         setupDynamicRelativeTime();
         setupLazyImages();
+        setupAsyncWidgets();
     } finally {
         pageElement.classList.add("content-ready");
         pageElement.setAttribute("aria-busy", "false");
