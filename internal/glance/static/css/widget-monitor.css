@@ -34,3 +34,17 @@
     height: 1.8rem;
     flex-shrink: 0;
 }
+
+.monitor-site-status-icon .loading-icon {
+    width: 1.6rem;
+    height: 1.6rem;
+    min-width: 1.6rem;
+    border-width: 0.2rem;
+}
+
+.monitor-site-status-icon-compact .loading-icon {
+    width: 1.4rem;
+    height: 1.4rem;
+    min-width: 1.4rem;
+    border-width: 0.2rem;
+}

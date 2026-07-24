@@ -1,7 +1,7 @@
 {{ template "widget-base.html" . }}
 
 {{ define "widget-content" }}
-{{ if not (and .ShowFailingOnly (not .HasFailing)) }}
+{{ if not (and .ShowFailingOnly (not .HasFailing) (not .HasPending)) }}
 <ul class="dynamic-columns list-gap-20 list-with-separator">
     {{ range .Sites }}
     {{ if and $.ShowFailingOnly (eq .StatusStyle "ok" ) }} {{ continue }} {{ end }}
@@ -27,7 +27,9 @@
 <div class="grow min-width-0">
     <a class="size-h3 color-highlight text-truncate block" href="{{ .URL | safeURL }}" {{ if not .SameTab }}target="_blank"{{ end }} rel="noreferrer">{{ .Title }}</a>
     <ul class="list-horizontal-text">
-        {{ if not .Status.Error }}
+        {{ if .Status.Pending }}
+        <li class="color-subdue">Checking...</li>
+        {{ else if not .Status.Error }}
         <li title="{{ .Status.Code }}">{{ .StatusText }}</li>
         <li>{{ .Status.ResponseTime.Milliseconds | formatNumber }}ms</li>
         {{ else if .Status.TimedOut }}
@@ -37,7 +39,11 @@
         {{ end }}
     </ul>
 </div>
-{{ if eq .StatusStyle "ok" }}
+{{ if eq .StatusStyle "pending" }}
+<div class="monitor-site-status-icon">
+    <div class="loading-icon"></div>
+</div>
+{{ else if eq .StatusStyle "ok" }}
 <div class="monitor-site-status-icon">
     <svg fill="var(--color-positive)" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
         <path fill-rule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm3.857-9.809a.75.75 0 0 0-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 1 0-1.06 1.061l2.5 2.5a.75.75 0 0 0 1.137-.089l4-5.5Z" clip-rule="evenodd" />
