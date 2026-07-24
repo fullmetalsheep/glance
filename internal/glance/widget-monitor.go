@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -32,6 +33,10 @@ type monitorWidget struct {
 	Style           string `yaml:"style"`
 	ShowFailingOnly bool   `yaml:"show-failing-only"`
 	HasFailing      bool   `yaml:"-"`
+	HasPending      bool   `yaml:"-"`
+
+	mu       sync.Mutex `yaml:"-"`
+	updating bool       `yaml:"-"`
 }
 
 func (widget *monitorWidget) initialize() error {
@@ -40,7 +45,42 @@ func (widget *monitorWidget) initialize() error {
 	return nil
 }
 
-func (widget *monitorWidget) update(ctx context.Context) {
+// update is called synchronously as part of the page's blocking update
+// pass, so it must never block on network I/O. The actual site checks
+// are done in a detached goroutine (refreshSites) - on the very first
+// run this leaves the widget showing "checking" placeholders, and on
+// subsequent runs it leaves the previously fetched (stale) statuses in
+// place until the background refresh completes.
+func (widget *monitorWidget) update(_ context.Context) {
+	widget.mu.Lock()
+
+	if widget.updating {
+		widget.mu.Unlock()
+		return
+	}
+	widget.updating = true
+
+	if !widget.ContentAvailable {
+		for i := range widget.Sites {
+			site := &widget.Sites[i]
+			if site.Status == nil {
+				site.Status = &siteStatus{Pending: true}
+				site.StatusText = "Checking..."
+				site.StatusStyle = "pending"
+				site.URL = site.DefaultURL
+			}
+		}
+
+		widget.HasPending = true
+		widget.ContentAvailable = true
+	}
+
+	widget.mu.Unlock()
+
+	go widget.refreshSites()
+}
+
+func (widget *monitorWidget) refreshSites() {
 	requests := make([]*SiteStatusRequest, len(widget.Sites))
 
 	for i := range widget.Sites {
@@ -49,11 +89,18 @@ func (widget *monitorWidget) update(ctx context.Context) {
 
 	statuses, err := fetchStatusForSites(requests)
 
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
+
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
 
 	widget.HasFailing = false
+	widget.HasPending = false
 
 	for i := range widget.Sites {
 		site := &widget.Sites[i]
@@ -75,12 +122,26 @@ func (widget *monitorWidget) update(ctx context.Context) {
 	}
 }
 
+// IsPending is only ever called from within a template invoked by Render,
+// which already holds widget.mu - locking here would deadlock.
+func (widget *monitorWidget) IsPending() bool {
+	return widget.HasPending
+}
+
 func (widget *monitorWidget) Render() template.HTML {
+	widget.mu.Lock()
+	defer widget.mu.Unlock()
+
 	if widget.Style == "compact" {
 		return widget.renderTemplate(widget, monitorWidgetCompactTemplate)
 	}
 
 	return widget.renderTemplate(widget, monitorWidgetTemplate)
+}
+
+func (widget *monitorWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(widget.Render()))
 }
 
 func statusCodeToText(status int, altStatusCodes []int) string {
@@ -130,6 +191,7 @@ type siteStatus struct {
 	TimedOut     bool
 	ResponseTime time.Duration
 	Error        error
+	Pending      bool
 }
 
 func fetchSiteStatusTask(statusRequest *SiteStatusRequest) (siteStatus, error) {
