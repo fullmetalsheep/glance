@@ -43,12 +43,30 @@ func (widget *hackerNewsWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *hackerNewsWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *hackerNewsWidget) refresh(_ context.Context) {
 	posts, err := fetchHackerNewsPosts(widget.SortBy, 40, widget.CommentsUrlTemplate)
+
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
 
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
+
+	widget.pending = false
 
 	if widget.ExtraSortBy == "engagement" {
 		posts.calculateEngagement()
@@ -63,7 +81,11 @@ func (widget *hackerNewsWidget) update(ctx context.Context) {
 }
 
 func (widget *hackerNewsWidget) Render() template.HTML {
-	return widget.renderTemplate(widget, forumPostsTemplate)
+	return widget.renderLocked(widget, forumPostsTemplate)
+}
+
+func (widget *hackerNewsWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type hackerNewsPostResponseJson struct {

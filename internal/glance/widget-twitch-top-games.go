@@ -38,18 +38,40 @@ func (widget *twitchGamesWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *twitchGamesWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *twitchGamesWidget) refresh(_ context.Context) {
 	categories, err := fetchTopGamesFromTwitch(widget.Exclude, widget.Limit)
+
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
 
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
 
+	widget.pending = false
+
 	widget.Categories = categories
 }
 
 func (widget *twitchGamesWidget) Render() template.HTML {
-	return widget.renderTemplate(widget, twitchGamesWidgetTemplate)
+	return widget.renderLocked(widget, twitchGamesWidgetTemplate)
+}
+
+func (widget *twitchGamesWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type twitchCategory struct {

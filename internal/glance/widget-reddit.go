@@ -98,11 +98,30 @@ func (widget *redditWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *redditWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *redditWidget) refresh(_ context.Context) {
 	posts, err := widget.fetchSubredditPosts()
+
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
+
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
+
+	widget.pending = false
 
 	if len(posts) > widget.Limit {
 		posts = posts[:widget.Limit]
@@ -118,15 +137,18 @@ func (widget *redditWidget) update(ctx context.Context) {
 
 func (widget *redditWidget) Render() template.HTML {
 	if widget.Style == "horizontal-cards" {
-		return widget.renderTemplate(widget, redditWidgetHorizontalCardsTemplate)
+		return widget.renderLocked(widget, redditWidgetHorizontalCardsTemplate)
 	}
 
 	if widget.Style == "vertical-cards" {
-		return widget.renderTemplate(widget, redditWidgetVerticalCardsTemplate)
+		return widget.renderLocked(widget, redditWidgetVerticalCardsTemplate)
 	}
 
-	return widget.renderTemplate(widget, forumPostsTemplate)
+	return widget.renderLocked(widget, forumPostsTemplate)
+}
 
+func (widget *redditWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type subredditResponseJson struct {

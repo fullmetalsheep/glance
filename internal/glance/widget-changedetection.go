@@ -41,22 +41,50 @@ func (widget *changeDetectionWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *changeDetectionWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *changeDetectionWidget) refresh(_ context.Context) {
+	// unconditionally reset on every return path, since the UUID bootstrap
+	// below can return early before the main lock/unlock further down
+	defer func() {
+		widget.mu.Lock()
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
+
 	if len(widget.WatchUUIDs) == 0 {
 		uuids, err := fetchWatchUUIDsFromChangeDetection(widget.InstanceURL, string(widget.Token))
 
-		if !widget.canContinueUpdateAfterHandlingErr(err) {
+		widget.mu.Lock()
+		ok := widget.canContinueUpdateAfterHandlingErr(err)
+		if ok {
+			widget.WatchUUIDs = uuids
+		}
+		widget.mu.Unlock()
+
+		if !ok {
 			return
 		}
-
-		widget.WatchUUIDs = uuids
 	}
 
 	watches, err := fetchWatchesFromChangeDetection(widget.InstanceURL, widget.WatchUUIDs, string(widget.Token))
 
+	widget.mu.Lock()
+	defer widget.mu.Unlock()
+
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
+
+	widget.pending = false
 
 	if len(watches) > widget.Limit {
 		watches = watches[:widget.Limit]
@@ -66,7 +94,11 @@ func (widget *changeDetectionWidget) update(ctx context.Context) {
 }
 
 func (widget *changeDetectionWidget) Render() template.HTML {
-	return widget.renderTemplate(widget, changeDetectionWidgetTemplate)
+	return widget.renderLocked(widget, changeDetectionWidgetTemplate)
+}
+
+func (widget *changeDetectionWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type changeDetectionWatch struct {

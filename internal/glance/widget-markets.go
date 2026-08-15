@@ -47,12 +47,30 @@ func (widget *marketsWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *marketsWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *marketsWidget) refresh(_ context.Context) {
 	markets, err := fetchMarketsDataFromYahoo(widget.MarketRequests)
+
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
 
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
+
+	widget.pending = false
 
 	if widget.Sort == "absolute-change" {
 		markets.sortByAbsChange()
@@ -64,7 +82,11 @@ func (widget *marketsWidget) update(ctx context.Context) {
 }
 
 func (widget *marketsWidget) Render() template.HTML {
-	return widget.renderTemplate(widget, marketsWidgetTemplate)
+	return widget.renderLocked(widget, marketsWidgetTemplate)
+}
+
+func (widget *marketsWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type marketRequest struct {

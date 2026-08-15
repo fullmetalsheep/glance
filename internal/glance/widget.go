@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -164,6 +165,10 @@ type widgetBase struct {
 	cacheType           cacheType        `yaml:"-"`
 	nextUpdate          time.Time        `yaml:"-"`
 	updateRetriedTimes  int              `yaml:"-"`
+
+	mu       sync.Mutex `yaml:"-"`
+	updating bool       `yaml:"-"`
+	pending  bool       `yaml:"-"`
 }
 
 type widgetProviders struct {
@@ -175,27 +180,64 @@ func (w *widgetBase) requiresUpdate(now *time.Time) bool {
 		return false
 	}
 
-	if w.nextUpdate.IsZero() {
+	// nextUpdate is written under w.mu by a background refresh, so it
+	// needs the same lock here to avoid a race.
+	w.mu.Lock()
+	nextUpdate := w.nextUpdate
+	w.mu.Unlock()
+
+	if nextUpdate.IsZero() {
 		return true
 	}
 
-	return now.After(w.nextUpdate)
+	return now.After(nextUpdate)
 }
 
 func (w *widgetBase) IsWIP() bool {
 	return w.WIP
 }
 
-// IsPending reports whether the widget is still waiting on its first
-// successful data fetch and is currently showing placeholder content.
-// Overridden by widgets that update asynchronously in the background
-// so the client knows to poll for the real content.
+// IsPending must not lock w.mu - it's only ever called from within
+// renderLocked's template execution, which already holds it.
 func (w *widgetBase) IsPending() bool {
-	return false
+	return w.pending
 }
 
 func (w *widgetBase) update(ctx context.Context) {
 
+}
+
+// Returns false if a refresh is already in flight. On the first call it
+// flips ContentAvailable so the widget renders a pending placeholder.
+func (w *widgetBase) tryStartAsyncUpdate() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.updating {
+		return false
+	}
+	w.updating = true
+
+	if !w.ContentAvailable {
+		w.pending = true
+		w.ContentAvailable = true
+	}
+
+	return true
+}
+
+// Use instead of renderTemplate for widgets that refresh asynchronously,
+// so rendering can't race with a background refresh mutating fields.
+func (w *widgetBase) renderLocked(data any, t *template.Template) template.HTML {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.renderTemplate(data, t)
+}
+
+func writeWidgetContent(w http.ResponseWriter, content template.HTML) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(content))
 }
 
 func (w *widgetBase) GetID() uint64 {

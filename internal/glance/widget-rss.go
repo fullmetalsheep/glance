@@ -77,12 +77,30 @@ func (widget *rssWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *rssWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *rssWidget) refresh(_ context.Context) {
 	items, err := widget.fetchItemsFromFeeds()
+
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
 
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
+
+	widget.pending = false
 
 	if !widget.PreserveOrder {
 		items.sortByNewest()
@@ -97,18 +115,22 @@ func (widget *rssWidget) update(ctx context.Context) {
 
 func (widget *rssWidget) Render() template.HTML {
 	if widget.Style == "horizontal-cards" {
-		return widget.renderTemplate(widget, rssWidgetHorizontalCardsTemplate)
+		return widget.renderLocked(widget, rssWidgetHorizontalCardsTemplate)
 	}
 
 	if widget.Style == "horizontal-cards-2" {
-		return widget.renderTemplate(widget, rssWidgetHorizontalCards2Template)
+		return widget.renderLocked(widget, rssWidgetHorizontalCards2Template)
 	}
 
 	if widget.Style == "detailed-list" {
-		return widget.renderTemplate(widget, rssWidgetDetailedListTemplate)
+		return widget.renderLocked(widget, rssWidgetDetailedListTemplate)
 	}
 
-	return widget.renderTemplate(widget, rssWidgetTemplate)
+	return widget.renderLocked(widget, rssWidgetTemplate)
+}
+
+func (widget *rssWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type cachedRSSFeed struct {

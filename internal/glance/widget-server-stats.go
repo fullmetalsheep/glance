@@ -39,9 +39,32 @@ func (widget *serverStatsWidget) initialize() error {
 	return nil
 }
 
-func (widget *serverStatsWidget) update(context.Context) {
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
+func (widget *serverStatsWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *serverStatsWidget) refresh(context.Context) {
 	// Refactor later, most of it may change depending on feedback
+	defer func() {
+		widget.mu.Lock()
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
+
 	var wg sync.WaitGroup
+
+	// buffered locally instead of writing widget.Servers[i] directly,
+	// since that would race with a concurrent Render()
+	results := make([]struct {
+		isReachable bool
+		info        *sysinfo.SystemInfo
+	}, len(widget.Servers))
 
 	for i := range widget.Servers {
 		serv := &widget.Servers[i]
@@ -55,33 +78,49 @@ func (widget *serverStatsWidget) update(context.Context) {
 				}
 			}
 
-			serv.IsReachable = true
-			serv.Info = info
+			results[i].isReachable = true
+			results[i].info = info
 		} else {
 			wg.Add(1)
+			i := i
 			go func() {
 				defer wg.Done()
 				info, err := fetchRemoteServerInfo(serv)
 				if err != nil {
 					slog.Warn("Getting remote system info: " + err.Error())
-					serv.IsReachable = false
-					serv.Info = &sysinfo.SystemInfo{
+					results[i].isReachable = false
+					results[i].info = &sysinfo.SystemInfo{
 						Hostname: "Unnamed server #" + strconv.Itoa(i+1),
 					}
 				} else {
-					serv.IsReachable = true
-					serv.Info = info
+					results[i].isReachable = true
+					results[i].info = info
 				}
 			}()
 		}
 	}
 
 	wg.Wait()
+
+	widget.mu.Lock()
+	defer widget.mu.Unlock()
+
+	widget.pending = false
+
+	for i := range widget.Servers {
+		widget.Servers[i].IsReachable = results[i].isReachable
+		widget.Servers[i].Info = results[i].info
+	}
+
 	widget.withError(nil).scheduleNextUpdate()
 }
 
 func (widget *serverStatsWidget) Render() template.HTML {
-	return widget.renderTemplate(widget, serverStatsWidgetTemplate)
+	return widget.renderLocked(widget, serverStatsWidgetTemplate)
+}
+
+func (widget *serverStatsWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type serverStatsRequest struct {

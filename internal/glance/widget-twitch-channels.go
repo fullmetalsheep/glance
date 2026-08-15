@@ -39,12 +39,30 @@ func (widget *twitchChannelsWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *twitchChannelsWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *twitchChannelsWidget) refresh(_ context.Context) {
 	channels, err := fetchChannelsFromTwitch(widget.ChannelsRequest)
+
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
 
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
+
+	widget.pending = false
 
 	if widget.SortBy == "viewers" {
 		channels.sortByViewers()
@@ -56,7 +74,11 @@ func (widget *twitchChannelsWidget) update(ctx context.Context) {
 }
 
 func (widget *twitchChannelsWidget) Render() template.HTML {
-	return widget.renderTemplate(widget, twitchChannelsWidgetTemplate)
+	return widget.renderLocked(widget, twitchChannelsWidgetTemplate)
+}
+
+func (widget *twitchChannelsWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type twitchChannel struct {

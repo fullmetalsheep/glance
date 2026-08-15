@@ -63,12 +63,30 @@ func (widget *videosWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *videosWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *videosWidget) refresh(_ context.Context) {
 	videos, err := fetchYoutubeChannelUploads(widget.Channels, widget.VideoUrlTemplate, widget.IncludeShorts)
+
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
 
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
+
+	widget.pending = false
 
 	if len(videos) > widget.Limit {
 		videos = videos[:widget.Limit]
@@ -89,7 +107,11 @@ func (widget *videosWidget) Render() template.HTML {
 		template = videosWidgetTemplate
 	}
 
-	return widget.renderTemplate(widget, template)
+	return widget.renderLocked(widget, template)
+}
+
+func (widget *videosWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type youtubeFeedResponseXml struct {

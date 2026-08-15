@@ -84,7 +84,17 @@ func (widget *dnsStatsWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *dnsStatsWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *dnsStatsWidget) refresh(_ context.Context) {
 	var stats *dnsStats
 	var err error
 
@@ -110,9 +120,17 @@ func (widget *dnsStatsWidget) update(ctx context.Context) {
 		}
 	}
 
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
+
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
+
+	widget.pending = false
 
 	if widget.HourFormat == "24h" {
 		widget.TimeLabels = makeDNSWidgetTimeLabels("15:00")
@@ -124,7 +142,11 @@ func (widget *dnsStatsWidget) update(ctx context.Context) {
 }
 
 func (widget *dnsStatsWidget) Render() template.HTML {
-	return widget.renderTemplate(widget, dnsStatsWidgetTemplate)
+	return widget.renderLocked(widget, dnsStatsWidgetTemplate)
+}
+
+func (widget *dnsStatsWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type dnsStats struct {

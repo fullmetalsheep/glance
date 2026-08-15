@@ -40,7 +40,17 @@ func (widget *repositoryWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *repositoryWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *repositoryWidget) refresh(_ context.Context) {
 	details, err := fetchRepositoryDetailsFromGithub(
 		widget.RequestedRepository,
 		string(widget.Token),
@@ -49,15 +59,27 @@ func (widget *repositoryWidget) update(ctx context.Context) {
 		widget.CommitsLimit,
 	)
 
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
+
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
+
+	widget.pending = false
 
 	widget.Repository = details
 }
 
 func (widget *repositoryWidget) Render() template.HTML {
-	return widget.renderTemplate(widget, repositoryWidgetTemplate)
+	return widget.renderLocked(widget, repositoryWidgetTemplate)
+}
+
+func (widget *repositoryWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type repository struct {

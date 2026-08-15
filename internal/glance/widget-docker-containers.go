@@ -36,7 +36,17 @@ func (widget *dockerContainersWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *dockerContainersWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *dockerContainersWidget) refresh(_ context.Context) {
 	containers, err := fetchDockerContainers(
 		widget.SockPath,
 		widget.HideByDefault,
@@ -45,16 +55,29 @@ func (widget *dockerContainersWidget) update(ctx context.Context) {
 		widget.FormatContainerNames,
 		widget.LabelOverrides,
 	)
+
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
+
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
+
+	widget.pending = false
 
 	containers.sortByStateIconThenTitle()
 	widget.Containers = containers
 }
 
 func (widget *dockerContainersWidget) Render() template.HTML {
-	return widget.renderTemplate(widget, dockerContainersWidgetTemplate)
+	return widget.renderLocked(widget, dockerContainersWidgetTemplate)
+}
+
+func (widget *dockerContainersWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 const (

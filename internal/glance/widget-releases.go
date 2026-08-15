@@ -52,12 +52,30 @@ func (widget *releasesWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *releasesWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *releasesWidget) refresh(_ context.Context) {
 	releases, err := fetchLatestReleases(widget.Repositories)
+
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
 
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
+
+	widget.pending = false
 
 	if len(releases) > widget.Limit {
 		releases = releases[:widget.Limit]
@@ -71,7 +89,11 @@ func (widget *releasesWidget) update(ctx context.Context) {
 }
 
 func (widget *releasesWidget) Render() template.HTML {
-	return widget.renderTemplate(widget, releasesWidgetTemplate)
+	return widget.renderLocked(widget, releasesWidgetTemplate)
+}
+
+func (widget *releasesWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type releaseSource string

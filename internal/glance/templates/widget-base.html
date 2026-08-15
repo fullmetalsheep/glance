@@ -23,6 +23,9 @@
         {{- else if .Notice }}
         <div class="notice-icon notice-icon-minor" title="{{ .Notice }}"></div>
         {{- end }}
+        {{- if .IsPending }}
+        <div class="widget-pending-icon loading-icon" title="Waiting for data..." aria-hidden="true"></div>
+        {{- end }}
     </div>
     {{- end }}
     <div class="widget-content{{ if .ContentAvailable }} {{ block "widget-content-classes" . }}{{ end }}{{ end }}">

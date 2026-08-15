@@ -56,28 +56,57 @@ func (widget *weatherWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *weatherWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *weatherWidget) refresh(_ context.Context) {
+	// unconditionally reset on every return path, since the place lookup
+	// below can return early before the main lock/unlock further down
+	defer func() {
+		widget.mu.Lock()
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
+
 	if widget.Place == nil {
 		place, err := fetchOpenMeteoPlaceFromName(widget.Location)
+
+		widget.mu.Lock()
 		if err != nil {
 			widget.withError(err).scheduleEarlyUpdate()
+			widget.mu.Unlock()
 			return
 		}
-
 		widget.Place = place
+		widget.mu.Unlock()
 	}
 
 	weather, err := fetchWeatherForOpenMeteoPlace(widget.Place, widget.Units)
+
+	widget.mu.Lock()
+	defer widget.mu.Unlock()
 
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
 
+	widget.pending = false
 	widget.Weather = weather
 }
 
 func (widget *weatherWidget) Render() template.HTML {
-	return widget.renderTemplate(widget, weatherWidgetTemplate)
+	return widget.renderLocked(widget, weatherWidgetTemplate)
+}
+
+func (widget *weatherWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type weather struct {

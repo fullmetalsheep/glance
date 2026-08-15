@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -34,9 +33,6 @@ type monitorWidget struct {
 	ShowFailingOnly bool   `yaml:"show-failing-only"`
 	HasFailing      bool   `yaml:"-"`
 	HasPending      bool   `yaml:"-"`
-
-	mu       sync.Mutex `yaml:"-"`
-	updating bool       `yaml:"-"`
 }
 
 func (widget *monitorWidget) initialize() error {
@@ -129,19 +125,15 @@ func (widget *monitorWidget) IsPending() bool {
 }
 
 func (widget *monitorWidget) Render() template.HTML {
-	widget.mu.Lock()
-	defer widget.mu.Unlock()
-
 	if widget.Style == "compact" {
-		return widget.renderTemplate(widget, monitorWidgetCompactTemplate)
+		return widget.renderLocked(widget, monitorWidgetCompactTemplate)
 	}
 
-	return widget.renderTemplate(widget, monitorWidgetTemplate)
+	return widget.renderLocked(widget, monitorWidgetTemplate)
 }
 
 func (widget *monitorWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(widget.Render()))
+	writeWidgetContent(w, widget.Render())
 }
 
 func statusCodeToText(status int, altStatusCodes []int) string {

@@ -75,19 +75,42 @@ func (widget *customAPIWidget) initialize() error {
 	return nil
 }
 
+// update must not block on network I/O since it runs in the page's
+// synchronous update pass; the real fetch happens in refresh().
 func (widget *customAPIWidget) update(ctx context.Context) {
+	if !widget.tryStartAsyncUpdate() {
+		return
+	}
+
+	go widget.refresh(ctx)
+}
+
+func (widget *customAPIWidget) refresh(_ context.Context) {
 	compiledHTML, err := fetchAndRenderCustomAPIRequest(
 		widget.CustomAPIRequest, widget.Subrequests, widget.Options, widget.compiledTemplate,
 	)
+
+	widget.mu.Lock()
+	defer func() {
+		widget.updating = false
+		widget.mu.Unlock()
+	}()
+
 	if !widget.canContinueUpdateAfterHandlingErr(err) {
 		return
 	}
+
+	widget.pending = false
 
 	widget.CompiledHTML = compiledHTML
 }
 
 func (widget *customAPIWidget) Render() template.HTML {
-	return widget.renderTemplate(widget, customAPIWidgetTemplate)
+	return widget.renderLocked(widget, customAPIWidgetTemplate)
+}
+
+func (widget *customAPIWidget) handleRequest(w http.ResponseWriter, r *http.Request) {
+	writeWidgetContent(w, widget.Render())
 }
 
 type customAPIOptions map[string]any
