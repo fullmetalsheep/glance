@@ -308,6 +308,27 @@ function setupGroups() {
     }
 }
 
+function imageFinishedTransition(image) {
+    image.classList.add("finished-transition");
+}
+
+function activateLazyImages(images) {
+    for (let i = 0; i < images.length; i++) {
+        const image = images[i];
+
+        if (image.complete) {
+            image.classList.add("cached");
+            setTimeout(() => imageFinishedTransition(image), 1);
+        } else {
+            // TODO: also handle error event
+            image.addEventListener("load", () => {
+                image.classList.add("loaded");
+                setTimeout(() => imageFinishedTransition(image), 400);
+            });
+        }
+    }
+}
+
 function setupLazyImages() {
     const images = document.querySelectorAll("img[loading=lazy]");
 
@@ -315,27 +336,8 @@ function setupLazyImages() {
         return;
     }
 
-    function imageFinishedTransition(image) {
-        image.classList.add("finished-transition");
-    }
-
     afterContentReady(() => {
-        setTimeout(() => {
-            for (let i = 0; i < images.length; i++) {
-                const image = images[i];
-
-                if (image.complete) {
-                    image.classList.add("cached");
-                    setTimeout(() => imageFinishedTransition(image), 1);
-                } else {
-                    // TODO: also handle error event
-                    image.addEventListener("load", () => {
-                        image.classList.add("loaded");
-                        setTimeout(() => imageFinishedTransition(image), 400);
-                    });
-                }
-            }
-        }, 1);
+        setTimeout(() => activateLazyImages(images), 1);
     });
 }
 
@@ -766,6 +768,7 @@ async function pollPendingWidget(widgetElement, attempt = 0) {
 
             widgetElement.replaceWith(newWidgetElement);
             setupTruncatedElementTitles();
+            activateLazyImages(newWidgetElement.querySelectorAll("img[loading=lazy]"));
 
             if (newWidgetElement.dataset.widgetPending === "true") {
                 pollPendingWidget(newWidgetElement, attempt + 1);
