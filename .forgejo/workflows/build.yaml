@@ -1,0 +1,59 @@
+name: Build and Push Image
+
+on: 
+  release:
+    types: [published] 
+
+enable-openid-connect: true
+
+jobs:
+  build-and-push:
+    runs-on: docker
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare Dynamic Variables
+        run: |
+          # 1. Strip http:// or https:// from the Forgejo server URL
+          echo "REGISTRY_DOMAIN=${GITHUB_SERVER_URL#*://}" >> $GITHUB_ENV
+          
+          # 2. Lowercase the repository name
+          echo "REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+          # 3. Sanitize branch or tag name for Docker tags
+          echo "SAFE_BRANCH=$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | tr '/' '-')" >> $GITHUB_ENV
+
+      - name: Fetch JWT for Registry Authentication
+        id: jwt
+        env:
+          AUD: u:1:0a1efc3f-ce38-4d2a-9c38-445669bf82d1
+        run: |
+          jwt=$( \
+            curl --fail \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUD" \
+            | jq -r ".value" \
+          )
+          echo "::add-mask::$jwt"
+          echo "jwt=$jwt" >> $FORGEJO_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Forgejo Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_DOMAIN }}
+          username: ${{ github.actor }}
+          password: ${{ steps.jwt.outputs.jwt }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.REGISTRY_DOMAIN }}/${{ env.REPO_LOWER }}:${{ env.SAFE_BRANCH }}
+            ${{ env.REGISTRY_DOMAIN }}/${{ env.REPO_LOWER }}:${{ env.SAFE_BRANCH }}-${{ github.run_number }}
